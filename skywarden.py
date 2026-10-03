@@ -1,5 +1,6 @@
 import sys
 import os
+import csv
 import json
 import re
 import time
@@ -18,6 +19,8 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
 import concurrent.futures
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QIcon
+
+from catalog import CATALOG
 
 CONFIG_FILE = "config_skywarden.json"
 LOG_FILE = "skywarden_log.txt"
@@ -58,20 +61,83 @@ THEMES = {
     "Standard Light Mode": ""
 }
 
-# Deep-sky catalogue entries (ephem.readdb format). Solar-system bodies are handled separately.
-DEEP_SKY = {
-    "M31": "M31,f|G,0:42:44.3,+41:16:09,3.4,2000",
-    "M42": "M42,f|N,5:35:17.3,-5:23:28,4.0,2000",
-    "M45": "M45,f|O,3:47:00,+24:07:00,1.6,2000",
-    "NGC 7000": "NGC 7000,f|N,20:58:47,+44:19:48,4.0,2000",
-    "NGC 2244": "NGC 2244,f|O,6:31:55,+4:56:30,4.8,2000",
-}
+# Deep-sky targets (ephem.readdb lines) built from catalog.py: all Messier and Caldwell
+# objects plus other named objects. TARGET_LABELS holds the text shown in the target box.
+DEEP_SKY = {k: f"{k},f|{code},{ra},{dec},{mag},2000"
+            for k, (label, ra, dec, mag, code) in CATALOG.items()}
+TARGET_LABELS = {k: v[0] for k, v in CATALOG.items()}
+
+# Solar-system targets. The Sun is deliberately left out: pointing a telescope at it without a
+# proper solar filter can destroy the equipment and cause blindness.
 SOLAR_SYSTEM = {
-    "Jupiter": ephem.Jupiter,
-    "Mars": ephem.Mars,
-    "Saturn": ephem.Saturn,
+    "Mercury": ephem.Mercury,
+    "Venus": ephem.Venus,
     "Moon": ephem.Moon,
+    "Mars": ephem.Mars,
+    "Jupiter": ephem.Jupiter,
+    "Saturn": ephem.Saturn,
+    "Uranus": ephem.Uranus,
+    "Neptune": ephem.Neptune,
 }
+for _name in SOLAR_SYSTEM:
+    TARGET_LABELS[_name] = f"{_name} — Solar system"
+
+# Your own targets: a CSV file next to where you run SkyWarden (see my_targets.example.csv).
+USER_TARGETS_FILE = "my_targets.csv"
+
+
+def load_user_targets(path=USER_TARGETS_FILE):
+    """Read extra targets from a CSV file with rows:  name,ra,dec[,description]
+
+    RA is in hours (HH:MM:SS) and Dec in degrees (+DD:MM:SS), J2000.
+    Returns ({name: (label, ephem_line)}, [problem messages]). A missing file is not an error.
+    """
+    targets, problems = {}, []
+    if not os.path.exists(path):
+        return targets, problems
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            rows = list(csv.reader(f))
+    except (OSError, UnicodeDecodeError, csv.Error) as e:
+        return targets, [f"Could not read {path}: {e}"]
+
+    first_data_row = True
+    for lineno, row in enumerate(rows, start=1):
+        cells = [c.strip() for c in row]
+        if not any(cells) or cells[0].startswith("#"):
+            continue
+        if first_data_row:
+            first_data_row = False
+            if cells[0].lower() == "name":
+                continue                                     # header row (may follow comment lines)
+        where = f"{path} line {lineno}"
+        if len(cells) < 3 or not cells[0] or not cells[1] or not cells[2]:
+            problems.append(f"{where}: needs name, ra, dec — skipped")
+            continue
+        name, ra, dec = cells[0], cells[1], cells[2]
+        note = cells[3] if len(cells) > 3 else ""
+        if "," in name or "|" in name or len(name) > 40:
+            problems.append(f"{where}: name must be under 40 characters with no ',' or '|' — skipped")
+            continue
+        if name in SOLAR_SYSTEM:
+            problems.append(f"{where}: '{name}' is a built-in solar-system target — skipped")
+            continue
+        line = f"{name},f|N,{ra},{dec},99,2000"
+        try:
+            body = ephem.readdb(line)
+            ra_h = math.degrees(float(body._ra)) / 15.0
+            dec_d = math.degrees(float(body._dec))
+        except Exception:
+            problems.append(f"{where}: can't read coordinates '{ra}' / '{dec}' — skipped")
+            continue
+        if not (0 <= ra_h < 24) or abs(dec_d) > 90:
+            problems.append(f"{where}: RA must be 0–24 hours (not degrees) and Dec ±90° — skipped")
+            continue
+        label = f"{name} · {note}" if note else name
+        if name in CATALOG:
+            problems.append(f"{where}: '{name}' replaces the built-in target of the same name")
+        targets[name] = (f"{label} — My target", line)
+    return targets, problems
 
 DEFAULTS = {
     "latitude": "51.5074",
@@ -791,6 +857,7 @@ class SkyWardenControlHub(QWidget):
         self.load_settings()
         self.initUI()
         self.apply_theme(self.settings.get("ui_theme", "Deep Space Gray (Dark)"))
+        self.reload_user_targets()      # adds anything in my_targets.csv to the target box
 
         # --- TIMER 1: MAIN METEOROLOGICAL & NOWCAST LOOP (15 Mins) ---
         self.INTERVAL_MS = 15 * 60 * 1000
@@ -839,10 +906,14 @@ class SkyWardenControlHub(QWidget):
                 logging.warning(f"Could not read {CONFIG_FILE}, using defaults: {e}")
 
     def save_settings_from_ui(self):
+        try:
+            target_key = self.current_target_key()
+        except ValueError:                       # unreadable text in the box: keep the saved target
+            target_key = self.settings.get("target", "M31")
         self.settings = {
             "latitude": self.lat_input.text().strip(),
             "longitude": self.lon_input.text().strip(),
-            "target": self.target_combo.currentText(),
+            "target": target_key,
             "max_wind": self.wind_limit_box.value(),
             "min_altitude": self.alt_limit_box.value(),
             "dew_threshold": self.dew_thresh_box.value(),
@@ -888,7 +959,7 @@ class SkyWardenControlHub(QWidget):
         self.settings_tab = QWidget()
 
         self.tabs.addTab(self.dashboard_tab, "📊 Control Dashboard")
-        self.tabs.addTab(self.settings_tab, "⚙️ Hardware & Configuration")
+        self.tabs.addTab(self.settings_tab, "⚙️ Hardware && Configuration")
 
         self.create_dashboard_ui()
         self.create_settings_ui()
@@ -915,14 +986,27 @@ class SkyWardenControlHub(QWidget):
         target_layout = QHBoxLayout()
         target_layout.addWidget(QLabel("Target Object:"))
         self.target_combo = QComboBox()
-        self.target_list = ["M31", "M42", "M45", "Jupiter", "Mars", "Saturn", "Moon", "NGC 7000", "NGC 2244"]
-        self.target_combo.addItems(self.target_list)
-        if self.settings["target"] in self.target_list:
-            self.target_combo.setCurrentText(self.settings["target"])
-        target_layout.addWidget(self.target_combo)
+        self.target_combo.setEditable(True)                  # type to search, e.g. "orion" or "m 51"
+        self.target_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.target_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.target_combo.setMinimumContentsLength(28)
+        self.target_combo.view().setMinimumWidth(520)
+        completer = self.target_combo.completer()
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setCompletionMode(completer.CompletionMode.PopupCompletion)
+        self.user_target_keys = []
+        self.rebuild_target_combo(self.settings.get("target", "M31"))
+        target_layout.addWidget(self.target_combo, 1)
+        self.reload_targets_button = QPushButton("↻")
+        self.reload_targets_button.setToolTip(f"Reload your own targets from {USER_TARGETS_FILE}")
+        self.reload_targets_button.setFixedWidth(34)
+        self.reload_targets_button.clicked.connect(lambda: self.reload_user_targets())
+        target_layout.addWidget(self.reload_targets_button)
         layout.addLayout(target_layout)
 
-        self.sync_button = QPushButton("🔄 Force Run Verification & Sync")
+        self.sync_button = QPushButton("🔄 Force Run Verification && Sync")
         self.sync_button.clicked.connect(self.handle_manual_check)
         layout.addWidget(self.sync_button)
 
@@ -930,7 +1014,7 @@ class SkyWardenControlHub(QWidget):
         self.auto_button.clicked.connect(self.toggle_automation)
         layout.addWidget(self.auto_button)
 
-        self.abort_button = QPushButton("🚨 EMERGENCY ABORT SCRIPT & PARK MOUNT")
+        self.abort_button = QPushButton("🚨 EMERGENCY ABORT SCRIPT && PARK MOUNT")
         self.abort_button.setFont(QFont("Arial", 11, QFont.Weight.Bold))
         self.abort_button.clicked.connect(self.trigger_emergency_abort)
         layout.addWidget(self.abort_button)
@@ -1065,13 +1149,91 @@ class SkyWardenControlHub(QWidget):
             raise ValueError("Latitude must be -90..90 and longitude -180..180.")
         return lat, lon
 
+    # ------------------------------------------------------------------- targets
+    def rebuild_target_combo(self, select_key=None):
+        """Fill the target box: your own targets first, then the solar system, then the catalogue."""
+        keys = list(dict.fromkeys(self.user_target_keys + list(SOLAR_SYSTEM) + list(CATALOG)))
+        self.target_combo.clear()
+        for key in keys:
+            self.target_combo.addItem(TARGET_LABELS.get(key, key), key)
+        idx = self.target_combo.findData(select_key) if select_key else -1
+        if idx < 0:
+            idx = max(self.target_combo.findData("M31"), 0)
+        self.target_combo.setCurrentIndex(idx)
+
+    def reload_user_targets(self):
+        """(Re)read my_targets.csv and refresh the target box, keeping the current selection."""
+        try:
+            keep = self.current_target_key()
+        except ValueError:
+            keep = self.settings.get("target", "M31")
+        for key in self.user_target_keys:                    # forget the previous user targets
+            if key in CATALOG:                               # restore a built-in that was replaced
+                v = CATALOG[key]
+                DEEP_SKY[key] = f"{key},f|{v[4]},{v[1]},{v[2]},{v[3]},2000"
+                TARGET_LABELS[key] = v[0]
+            else:
+                DEEP_SKY.pop(key, None)
+                TARGET_LABELS.pop(key, None)
+        targets, problems = load_user_targets()
+        for key, (label, line) in targets.items():
+            DEEP_SKY[key] = line
+            TARGET_LABELS[key] = label
+        self.user_target_keys = list(targets)
+        self.rebuild_target_combo(keep)
+        for p in problems:
+            self.log(f"⚠️ {p}", logging.WARNING)
+        if targets or problems:
+            self.log(f"🎯 Loaded {len(targets)} of your own target(s) from {USER_TARGETS_FILE}.")
+
+    @staticmethod
+    def _norm(text):
+        return re.sub(r"[^a-z0-9]", "", text.lower())
+
+    @staticmethod
+    def _common_names(label):
+        """'M31 (NGC 224) · Andromeda Galaxy — Galaxy, And'  ->  ['Andromeda Galaxy']"""
+        if " · " not in label:
+            return []
+        return [n.strip() for n in label.split(" · ", 1)[1].rsplit(" — ", 1)[0].split(" / ")]
+
+    def current_target_key(self):
+        """The key of the target in the box, whether it was picked or typed. Raises ValueError.
+
+        Only exact names are accepted (the label, the key such as "m31", or a common name such as
+        "Andromeda Galaxy"). Partial text never silently picks a target; it gives suggestions.
+        """
+        combo = self.target_combo
+        text = combo.currentText().strip()
+        if not text:
+            raise ValueError("No target selected.")
+        idx = combo.findText(text, Qt.MatchFlag.MatchFixedString)       # the exact label
+        if idx >= 0:
+            return combo.itemData(idx)
+        n = self._norm(text)
+        for i in range(combo.count()):                                   # a typed key: "m31", "NGC7000"
+            if self._norm(combo.itemData(i)) == n:
+                return combo.itemData(i)
+        for i in range(combo.count()):                                   # an exact common name
+            if any(self._norm(name) == n for name in self._common_names(combo.itemText(i))):
+                return combo.itemData(i)
+        hits = [i for i in range(combo.count()) if n in self._norm(combo.itemText(i))]
+        if hits:
+            def nice(i):
+                names = self._common_names(combo.itemText(i))
+                return f"{combo.itemData(i)} ({names[0]})" if names else combo.itemData(i)
+            more = f" and {len(hits) - 4} more" if len(hits) > 4 else ""
+            raise ValueError(f"'{text}' isn't an exact target name. Did you mean: "
+                             f"{', '.join(nice(i) for i in hits[:4])}{more}? Pick one from the list.")
+        raise ValueError(f"Unknown target '{text}'. Pick one from the list, or add it to {USER_TARGETS_FILE}.")
+
     def collect_check_params(self):
         """Snapshot every setting the worker needs (read on the GUI thread)."""
         lat, lon = self._read_coords()
         return {
             "lat": lat,
             "lon": lon,
-            "target": self.target_combo.currentText(),
+            "target": self.current_target_key(),
             "min_alt": self.alt_limit_box.value(),
             "max_wind": self.wind_limit_box.value(),
             "max_cloud": self.cloud_limit_box.value(),

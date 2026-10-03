@@ -18,6 +18,7 @@ It works with **ASCOM**, **Alpaca** and **INDI** equipment.
 - **Parks the mount** when conditions are unsafe, when you press the emergency button, or when the watchdog sees the check loop stall for more than 20 minutes. If a park fails, it retries 3 times and then alerts you to park by hand.
 - **Controls a dew heater** (ASCOM or Alpaca Switch device): on when the temperature is within your set margin of the dew point, off otherwise.
 - **Finds devices** by scanning for ASCOM drivers on the PC, Alpaca servers on the LAN and INDI servers on your subnet.
+- **300+ built-in targets:** every Messier and Caldwell object, other well-known named objects and the planets and Moon. Type in the target box to search, or add your own in `my_targets.csv` (see [Targets](#targets)).
 - **Three themes**, including an all-red night-vision theme.
 - **Log:** everything is written to `skywarden_log.txt` and shown in the app.
 
@@ -49,6 +50,26 @@ See [INSTALL.md](INSTALL.md) for the full guide, hardware driver notes and troub
 6. Click **Initialize Automated Monitoring Loop** to start monitoring.
 7. **EMERGENCY ABORT** stops monitoring and parks the mount.
 
+## Targets
+
+The target box on the dashboard lists:
+- **Solar system:** Mercury, Venus, the Moon, Mars, Jupiter, Saturn, Uranus and Neptune. The Sun is left out on purpose, because aiming a telescope at it without a proper solar filter can destroy the equipment and cause blindness.
+- **Deep sky:** all 109 Messier objects (M102 is left out because it duplicates M101), all 109 Caldwell objects, and other objects with a common name, such as the Horsehead Nebula. Each entry shows its other catalogue names, so you can search "NGC 7000", "C 20" or "North America".
+
+Click the box and start typing to search. You can also type an exact name, such as `m31`, `NGC7000` or `Andromeda Galaxy`. Partial text is never guessed: SkyWarden suggests matches instead, so a typo can't quietly pick the wrong object.
+
+**Adding your own targets:** copy `my_targets.example.csv` to `my_targets.csv` (in the folder you run SkyWarden from) and add one line per object:
+
+```
+name,ra,dec,description
+Polaris,02:31:49,+89:15:51,North Star
+```
+
+- `ra` is in **hours** (0 to 24), not degrees, and `dec` is in degrees, both J2000.
+- Press the reload button (↻) next to the target box after editing. Problem lines are skipped and listed in the log.
+- A name that matches a built-in target replaces it.
+- Moving objects such as comets and asteroids aren't supported, because their positions change every night.
+
 ## What works with what
 
 | Feature | ASCOM | Alpaca | INDI |
@@ -65,9 +86,12 @@ Classic ASCOM only finds drivers installed on the same PC. Remote ASCOM devices 
 | File | Purpose |
 |---|---|
 | `skywarden.py` | The application |
+| `catalog.py` | Built-in target list (data from OpenNGC, see Licence) |
+| `my_targets.example.csv` | Example for your own targets (copy to `my_targets.csv`) |
 | `requirements.txt` | Python libraries to install |
 | `pyproject.toml` | Package metadata (`pip install .`) |
 | `INSTALL.md` | Step-by-step install guide |
+| `LICENSE` | GPL-3.0 licence text |
 | `assets/skywarden.ico` | App icon, shown in the window and taskbar (keep the `assets` folder next to `skywarden.py`) |
 | `assets/skywarden_icon_512.png` | Large icon image used in this README |
 | `.github/workflows/main.yml` | Builds `SkyWarden.exe` on GitHub with PyInstaller |
@@ -84,4 +108,6 @@ Classic ASCOM only finds drivers installed on the same PC. Remote ASCOM devices 
 
 ## Licence
 
-No licence has been chosen yet. Add one before sharing the code.
+SkyWarden is free software, released under the [GNU General Public License v3.0](LICENSE) (GPL-3.0-only).
+
+**Target data:** the built-in target list in `catalog.py` is a filtered extract of [OpenNGC](https://github.com/mattiaverga/OpenNGC) by Mattia Verga and contributors, which is licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). Creative Commons lists CC BY-SA 4.0 material as one-way compatible with GPLv3, so it can be used in a GPLv3 project; keep this credit if you redistribute the data.

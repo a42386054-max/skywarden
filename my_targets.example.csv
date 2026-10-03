@@ -1,0 +1,11 @@
+# SkyWarden: your own targets.
+# Copy this file to "my_targets.csv" (same folder you run SkyWarden from), edit it, then
+# press the reload button (the circular arrow) next to the target box.
+#
+# Columns:  name, ra, dec, description (optional)
+#   ra  = right ascension in HOURS, HH:MM:SS  (0 to 24, not degrees)
+#   dec = declination in degrees, +DD:MM:SS   (J2000 coordinates)
+# Lines starting with # are ignored. A name that matches a built-in target replaces it.
+name,ra,dec,description
+Polaris,02:31:49,+89:15:51,North Star
+Vega,18:36:56,+38:47:01,Brightest star in Lyra
