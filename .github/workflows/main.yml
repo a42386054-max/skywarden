@@ -2,18 +2,12 @@ name: Build SkyWarden (Windows exe)
 
 on:
   push:
-    branches: [main]
-    tags: ["v0.1.1"]          # pushing a tag like v0.1.0 also publishes a GitHub Release
-  pull_request:
+    branches: [main]      # every push to main builds the exe and publishes a Release
+  pull_request:           # pull requests only build (no Release)
   workflow_dispatch:      # the "Run workflow" button on the Actions tab
-    inputs:
-      version:
-        description: "Release version to publish, e.g. v0.1.0 (leave empty to only build)"
-        required: false
-        type: string
 
 permissions:
-  contents: write         # lets the workflow push the tag and attach files to the Release
+  contents: write         # lets the workflow create the tag and the Release
 
 jobs:
   build:
@@ -21,23 +15,6 @@ jobs:
     steps:
       - name: Check out the code
         uses: actions/checkout@v7
-
-      # A release happens when you push a tag like v0.1.0, or when you start the workflow by
-      # hand and type a version. This step works out which one (empty = just build, no release).
-      - name: v0.1.1
-        id: rel
-        shell: pwsh
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          $tag = ""
-          if ($env:GITHUB_REF -like 'refs/tags/v*') { $tag = $env:GITHUB_REF_NAME }
-          elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $env:INPUT_VERSION) { $tag = $env:INPUT_VERSION.Trim() }
-          if ($tag -and $tag -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') {
-            throw "The version must look like v0.1.0 (got '$tag')."
-          }
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-          if ($tag) { "Release tag: $tag" } else { "No release tag - build only." }
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -60,6 +37,7 @@ jobs:
           --add-data "assets/skywarden.ico;assets"
           --hidden-import win32com.client
           --hidden-import pythoncom
+          --hidden-import catalog
           skywarden.py
 
       - name: Check the exe was built
@@ -79,26 +57,21 @@ jobs:
           path: SkyWarden-windows.zip
           if-no-files-found: error
 
-      # Only when started by hand with a version: create the tag and push it to GitHub.
-      # (A tag you pushed yourself already exists, so this step is skipped.) It runs after the
-      # build, so a failed build never leaves a tag behind. It fails if the tag already exists.
-      - name: Create the tag and push it to origin
-        if: github.event_name == 'workflow_dispatch' && steps.rel.outputs.tag != ''
-        shell: pwsh
-        env:
-          TAG: ${{ steps.rel.outputs.tag }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a $env:TAG -m "SkyWarden $env:TAG"
-          git push origin $env:TAG
-
-      - name: Publish a GitHub Release
-        if: steps.rel.outputs.tag != ''
+      # Runs on every push (and manual run), but not on pull requests.
+      # PyInstaller puts the exe in dist/, not build/, so the files below point there.
+      - name: Create GitHub Release
+        id: create_release
+        if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ steps.rel.outputs.tag }}
+          tag_name: build-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: Build Version ${{ github.run_number }}
+          body: |
+            Automated compilation from latest push.
+            Commit: ${{ github.sha }}
+          draft: false
+          prerelease: false
           files: |
             dist/SkyWarden.exe
             SkyWarden-windows.zip
-          generate_release_notes: true
