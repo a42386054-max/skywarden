@@ -3,38 +3,12 @@ name: Build SkyWarden (Windows exe)
 on:
   push:
     branches: [main]
-    tags: [" v0.1.1"]          
+    tags: ["v*"]          # pushing a tag like v0.1.0 also publishes a GitHub Release
   pull_request:
-  workflow_dispatch:      
-
-permissions:
-  contents: write         
-
-jobs:
-  build:
-    runs-on: windows-latest
-    steps:
-      - name: Check out the code
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      name: Build SkyWarden (Windows exe)
-
-on:
-  push:
-    branches: [main]
-    tags: ["v*"]         
-  pull_request:
-  workflow_dispatch:    
+  workflow_dispatch:      # the "Run workflow" button on the Actions tab
     inputs:
       version:
-        description: v0.1.1
+        description: "Release version to publish, e.g. v0.1.0 (leave empty to only build)"
         required: false
         type: string
 
@@ -86,7 +60,6 @@ jobs:
           --add-data "assets/skywarden.ico;assets"
           --hidden-import win32com.client
           --hidden-import pythoncom
-          --hidden-import catalog
           skywarden.py
 
       - name: Check the exe was built
