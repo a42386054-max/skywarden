@@ -3,7 +3,7 @@ name: Build SkyWarden (Windows exe)
 on:
   push:
     branches: [main]
-    tags: ["v*"]          # pushing a tag like v0.1.0 also publishes a GitHub Release
+    tags: ["v0.1.1"]          # pushing a tag like v0.1.0 also publishes a GitHub Release
   pull_request:
   workflow_dispatch:      # the "Run workflow" button on the Actions tab
     inputs:
