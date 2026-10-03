@@ -3,12 +3,12 @@ name: Build SkyWarden (Windows exe)
 on:
   push:
     branches: [main]
-    tags: [" v0.1.1"]          # pushing a tag like v0.1.0 also publishes a GitHub Release
+    tags: [" v0.1.1"]          
   pull_request:
-  workflow_dispatch:      # lets you run it by hand from the Actions tab
+  workflow_dispatch:      
 
 permissions:
-  contents: write         # needed only to attach the exe to a Release
+  contents: write         
 
 jobs:
   build:
@@ -29,12 +29,12 @@ jobs:
 on:
   push:
     branches: [main]
-    tags: ["v*"]          # pushing a tag like v0.1.0 also publishes a GitHub Release
+    tags: ["v*"]         
   pull_request:
-  workflow_dispatch:      # the "Run workflow" button on the Actions tab
+  workflow_dispatch:    
     inputs:
       version:
-        description: "Release version to publish, e.g. v0.1.0 (leave empty to only build)"
+        description: v0.1.1
         required: false
         type: string
 
