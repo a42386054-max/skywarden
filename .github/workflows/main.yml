@@ -3,7 +3,7 @@ name: Build SkyWarden (Windows exe)
 on:
   push:
     branches: [main]
-    tags: ["v*"]          # pushing a tag like v0.1.0 also publishes a GitHub Release
+    tags: ["v0.1.1"]          # pushing a tag like v0.1.0 also publishes a GitHub Release
   pull_request:
   workflow_dispatch:      # the "Run workflow" button on the Actions tab
     inputs:
@@ -24,7 +24,7 @@ jobs:
 
       # A release happens when you push a tag like v0.1.0, or when you start the workflow by
       # hand and type a version. This step works out which one (empty = just build, no release).
-      - name: Decide the release tag
+      - name: v0.1.1
         id: rel
         shell: pwsh
         env:
