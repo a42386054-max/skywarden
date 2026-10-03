@@ -1,0 +1,27 @@
+# --- SkyWarden: your own settings and logs (never upload these) ---
+config_skywarden.json
+skywarden_log.txt
+*.log
+
+# --- Python ---
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- Build output (PyInstaller / packaging) ---
+build/
+dist/
+*.spec
+
+# --- Editors and Windows ---
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# Your own target list (personal)
+my_targets.csv
