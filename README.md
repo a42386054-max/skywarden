@@ -19,6 +19,7 @@ It works with **ASCOM**, **Alpaca** and **INDI** equipment.
 - **Controls a dew heater** (ASCOM or Alpaca Switch device): on when the temperature is within your set margin of the dew point, off otherwise.
 - **Finds devices** by scanning for ASCOM drivers on the PC, Alpaca servers on the LAN and INDI servers on your subnet.
 - **300+ built-in targets:** every Messier and Caldwell object, other well-known named objects and the planets and Moon. Type in the target box to search, or add your own in `my_targets.csv` (see [Targets](#targets)).
+- **Phone alerts (optional):** sends a notification to your Android phone through [ntfy](https://ntfy.sh) when conditions turn unsafe, when the mount has parked, when a park fails (urgent), on emergency abort and when the watchdog fires. See [Phone alerts](#phone-alerts).
 - **Three themes**, including an all-red night-vision theme.
 - **Log:** everything is written to `skywarden_log.txt` and shown in the app.
 
@@ -69,6 +70,16 @@ Polaris,02:31:49,+89:15:51,North Star
 - Press the reload button (↻) next to the target box after editing. Problem lines are skipped and listed in the log.
 - A name that matches a built-in target replaces it.
 - Moving objects such as comets and asteroids aren't supported, because their positions change every night.
+
+## Phone alerts
+
+1. Install the free **ntfy** app on your Android phone and subscribe to a topic with a long random name, such as `skywarden-k7x92qmfa4`. The topic works like a password, so anyone who knows it can read your alerts.
+2. In SkyWarden, open **Hardware & Configuration**, type the same topic into **Phone Alerts (ntfy)**, and click **Save Settings**.
+3. Click **Send Test Alert** to check it works.
+
+To get alerts while the phone is on silent, open the ntfy app's notification settings in Android and turn on **Override Do Not Disturb** for the urgent channel. Test this with your phone on silent, because Android versions differ.
+
+The topic is stored in `config_skywarden.json`, which is not uploaded to GitHub. If an alert can't be sent (no internet, for example) it is logged and nothing else is affected. A phone alert is not a safety system: keep hardware safeguards in place.
 
 ## What works with what
 

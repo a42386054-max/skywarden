@@ -153,7 +153,9 @@ DEFAULTS = {
     "selected_mount_uri": "",
     "selected_camera_uri": "",
     "selected_heater_uri": "",
-    "selected_cloud_uri": ""
+    "selected_cloud_uri": "",
+    "ntfy_server": "https://ntfy.sh",
+    "ntfy_topic": ""
 }
 
 # ------------------------------------------------------------------ DEVICE DISCOVERY
@@ -791,6 +793,32 @@ def run_sky_check(p, say):
     return {"safe": not reasons, "reasons": reasons, "dew_on": dew_on}
 
 
+NTFY_TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def send_ntfy(server, topic, title, message, priority=3, tags=""):
+    """Send a phone alert through ntfy. Raises RuntimeError with a message that never
+    contains the topic (the topic acts like a password)."""
+    server = (server or "").strip().rstrip("/")
+    topic = (topic or "").strip()
+    if not NTFY_TOPIC_RE.match(topic):
+        raise RuntimeError("the ntfy topic may only use letters, numbers, - and _ (max 64)")
+    if not server.lower().startswith(("https://", "http://")):
+        raise RuntimeError("the ntfy server must start with https://")
+    headers = {"Title": title.encode("ascii", "replace").decode("ascii"),
+               "Priority": str(int(priority))}
+    if tags:
+        headers["Tags"] = tags
+    try:
+        r = requests.post(f"{server}/{topic}", data=message.encode("utf-8"),
+                          headers=headers, timeout=10)
+    except requests.RequestException as e:
+        raise RuntimeError(f"could not reach the ntfy server ({type(e).__name__})") from None
+    if r.status_code != 200:
+        raise RuntimeError(f"the ntfy server answered HTTP {r.status_code}")
+    return "sent"
+
+
 class TaskWorker(QThread):
     """Runs fn(say) off the GUI thread. COM is initialised for this thread on Windows."""
     message = pyqtSignal(str)
@@ -852,6 +880,7 @@ class SkyWardenControlHub(QWidget):
         self.park_in_progress = False
         self.heater_busy = False
         self.heater_state = None      # None = unknown, True = on, False = off
+        self.unsafe_alerted = False   # True after an "unsafe" phone alert, until conditions recover
         self.scan_worker = None
         self._tasks = set()           # keeps worker threads alive until they finish
         self.load_settings()
@@ -878,6 +907,31 @@ class SkyWardenControlHub(QWidget):
         logging.log(level, message)
         if hasattr(self, "log_output"):
             self.log_output.append(message)
+
+    # ------------------------------------------------------------- phone alerts
+    def notify(self, title, message, priority=3, tags=""):
+        """Send a phone alert (ntfy) if a topic is set. A failure is logged and never
+        stops anything else. Priority: 1 min, 3 default, 4 high, 5 urgent."""
+        topic = self.ntfy_topic_box.text().strip()
+        if not topic:
+            return
+        server = self.ntfy_server_box.text().strip()
+        self.run_task(lambda say: send_ntfy(server, topic, title, message, priority, tags),
+                      on_done=lambda _r: None,
+                      on_fail=lambda msg: self.log(f"⚠️ Phone alert not sent: {msg}", logging.WARNING))
+
+    def send_test_alert(self):
+        topic = self.ntfy_topic_box.text().strip()
+        server = self.ntfy_server_box.text().strip()
+        if not topic:
+            self.log("⚠️ Enter an ntfy topic first.", logging.WARNING)
+            return
+        self.log("📲 Sending a test alert...")
+        self.run_task(lambda say: send_ntfy(server, topic, "SkyWarden test",
+                                            "Test alert from SkyWarden. If you can hear this, alerts work.",
+                                            priority=5, tags="white_check_mark"),
+                      on_done=lambda _r: self.log("📲 Test alert sent. Check your phone."),
+                      on_fail=lambda msg: self.log(f"❌ Test alert failed: {msg}", logging.ERROR))
 
     # ------------------------------------------------------------- worker threads
     def run_task(self, fn, on_done=None, on_fail=None):
@@ -924,7 +978,9 @@ class SkyWardenControlHub(QWidget):
             "selected_mount_uri": self.mount_combo.currentData() or "",
             "selected_camera_uri": self.camera_combo.currentData() or "",
             "selected_heater_uri": self.heater_combo.currentData() or "",
-            "selected_cloud_uri": self.cloud_combo.currentData() or ""
+            "selected_cloud_uri": self.cloud_combo.currentData() or "",
+            "ntfy_server": self.ntfy_server_box.text().strip() or DEFAULTS["ntfy_server"],
+            "ntfy_topic": self.ntfy_topic_box.text().strip()
         }
         try:
             with open(CONFIG_FILE, "w") as f:
@@ -1037,7 +1093,7 @@ class SkyWardenControlHub(QWidget):
 
     def create_settings_ui(self):
         layout = QFormLayout()
-        layout.setVerticalSpacing(12)
+        layout.setVerticalSpacing(6)
 
         env_header = QLabel("Environmental Threshold Safeguards")
         env_header.setFont(QFont("Arial", 10, QFont.Weight.Bold))
@@ -1094,6 +1150,19 @@ class SkyWardenControlHub(QWidget):
 
         self.cloud_combo = self._make_device_combo(self.settings.get("selected_cloud_uri", ""), "cloud")
         layout.addRow("Cloud Sensor:", self.cloud_combo)
+
+        alert_header = QLabel("\nPhone Alerts (ntfy)")
+        alert_header.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        layout.addRow(alert_header)
+
+        self.ntfy_topic_box = QLineEdit(str(self.settings.get("ntfy_topic", "")))
+        self.ntfy_topic_box.setPlaceholderText("long random name, e.g. skywarden-k7x92qmfa4")
+        layout.addRow("Topic (keep secret):", self.ntfy_topic_box)
+        self.ntfy_server_box = QLineEdit(str(self.settings.get("ntfy_server", DEFAULTS["ntfy_server"])))
+        layout.addRow("Server:", self.ntfy_server_box)
+        test_alert_button = QPushButton("📲 Send Test Alert")
+        test_alert_button.clicked.connect(self.send_test_alert)
+        layout.addRow(test_alert_button)
 
         self.scan_button = QPushButton("🔍 Scan for ASCOM / Alpaca / INDI Devices")
         self.scan_button.clicked.connect(self.start_scan)
@@ -1264,10 +1333,20 @@ class SkyWardenControlHub(QWidget):
         self.last_check_time = time.time()
         if res["safe"]:
             self.log("✅ Conditions SAFE for imaging.")
+            if self.unsafe_alerted and self.automation_running:
+                self.notify("SkyWarden: conditions safe again",
+                            "Conditions are safe again. The mount stays parked until you restart imaging.",
+                            priority=3, tags="white_check_mark")
+            self.unsafe_alerted = False
         else:
             for r in res["reasons"]:
                 self.log(f"🛑 {r}", logging.WARNING)
             if self.automation_running:
+                if not self.unsafe_alerted:       # one alert per spell, not one every 15 minutes
+                    self.unsafe_alerted = True
+                    self.notify("SkyWarden: UNSAFE - parking mount",
+                                "; ".join(res["reasons"]) or "Unsafe conditions",
+                                priority=4, tags="warning")
                 self.park_mount("Unsafe conditions")
         dew_on = res.get("dew_on")
         if dew_on is not None:
@@ -1293,12 +1372,14 @@ class SkyWardenControlHub(QWidget):
         suffix = f", attempt {_attempt + 1}" if _attempt else ""
         self.log(f"🅿️ Parking mount ({reason}{suffix})...", logging.WARNING)
         self.run_task(lambda say: park_mount_device(uri, say),
-                      on_done=self._park_done,
+                      on_done=functools.partial(self._park_done, reason),
                       on_fail=functools.partial(self._park_failed, reason, _attempt))
 
-    def _park_done(self, result):
+    def _park_done(self, reason, result):
         self.park_in_progress = False
         self.log(f"🅿️ Mount {result}.", logging.WARNING)
+        self.notify("SkyWarden: mount parked", f"Mount {result}. Reason: {reason}.",
+                    priority=3, tags="parking")
 
     def _park_failed(self, reason, attempt, msg):
         self.park_in_progress = False
@@ -1308,6 +1389,9 @@ class SkyWardenControlHub(QWidget):
             QTimer.singleShot(PARK_RETRY_DELAY_MS, lambda: self.park_mount(reason, attempt + 1))
         else:
             self.log("🚨 Giving up on automatic parking. PARK THE MOUNT MANUALLY.", logging.CRITICAL)
+            self.notify("SkyWarden: PARK FAILED",
+                        f"Could not park the mount ({reason}). Park it manually! Last error: {msg}",
+                        priority=5, tags="rotating_light,sos")
             QMessageBox.critical(self, "SkyWarden", f"Could not park the mount:\n{msg}\n\nPark it manually!")
 
     def set_heater(self, on):
@@ -1348,6 +1432,8 @@ class SkyWardenControlHub(QWidget):
 
     def trigger_emergency_abort(self):
         self.log("🚨 EMERGENCY ABORT triggered by user.", logging.CRITICAL)
+        self.notify("SkyWarden: emergency abort", "Emergency abort pressed. Monitoring stopped, parking the mount.",
+                    priority=4, tags="rotating_light")
         if self.automation_running:
             self.toggle_automation()
         self.park_mount("Emergency abort")
@@ -1362,6 +1448,9 @@ class SkyWardenControlHub(QWidget):
         # If the 15-minute loop has stalled (e.g. >20 min since last good check), fail safe.
         if time.time() - self.last_check_time > 20 * 60:
             self.log("⏱️ Watchdog: nowcast loop stalled >20 min.", logging.ERROR)
+            self.notify("SkyWarden: watchdog timeout",
+                        "The sky-check loop stalled for over 20 minutes. Parking the mount.",
+                        priority=4, tags="warning")
             self.park_mount("Watchdog timeout")
             self.last_check_time = time.time()  # avoid log spam every second
 
