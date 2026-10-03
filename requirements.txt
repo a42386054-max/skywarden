@@ -1,0 +1,4 @@
+PyQt6>=6.4
+requests>=2.28
+ephem>=4.1
+pywin32>=305; sys_platform == "win32"

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skywarden"
+version = "0.1.0"
+description = "Observatory safety monitor: sky and weather checks, with park, dew heater and cloud sensor control over ASCOM, Alpaca and INDI."
+readme = "INSTALL.md"
+requires-python = ">=3.10"
+dependencies = [
+    "PyQt6>=6.4",
+    "requests>=2.28",
+    "ephem>=4.1",
+    "pywin32>=305; sys_platform == 'win32'",
+]
+
+[tool.setuptools]
+py-modules = ["skywarden"]
